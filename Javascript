@@ -1,0 +1,117 @@
+//  SUPORTE
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (!SpeechRecognition) {
+  alert("Use o Google Chrome para funcionar");
+}
+
+const rec = new SpeechRecognition();
+rec.lang = "pt-BR";
+
+// 📍 MAPA
+const map = L.map('map').setView([-23.42, -51.93], 15); // Maringá
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+let userLat = -23.42;
+let userLng = -51.93;
+
+// localização real
+navigator.geolocation.getCurrentPosition(pos=>{
+  userLat = pos.coords.latitude;
+  userLng = pos.coords.longitude;
+
+  map.setView([userLat, userLng], 15);
+  L.marker([userLat, userLng]).addTo(map).bindPopup("Você está aqui").openPopup();
+});
+
+// 🔊 FALAR
+function falar(texto){
+  const u = new SpeechSynthesisUtterance(texto);
+  u.lang = "pt-BR";
+  u.rate = 0.9;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+// 🔔 BIP
+function beep(){
+  const ctx = new AudioContext();
+  const osc = ctx.createOscillator();
+  osc.connect(ctx.destination);
+  osc.start();
+  setTimeout(()=>osc.stop(), 150);
+}
+
+// 🎤 BOTÃO
+document.getElementById("btn").onclick = () => {
+  document.getElementById("status").innerText = "Preparando...";
+
+  falar("Para onde você quer ir?");
+
+  setTimeout(()=>{
+    beep();
+    document.getElementById("status").innerText = "Ouvindo...";
+    try{
+      rec.start();
+    }catch(e){}
+  },1500);
+};
+
+//  RESULTADO
+rec.onresult = async (e)=>{
+  const destino = e.results[0][0].transcript;
+  document.getElementById("status").innerText = "Destino: " + destino;
+
+  const busca = destino + ", Maringá PR";
+
+  const geo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${busca}`);
+  const data = await geo.json();
+
+  if(!data[0]){
+    falar("Não encontrei esse lugar");
+    return;
+  }
+
+  const lat = data[0].lat;
+  const lon = data[0].lon;
+
+  const rota = await fetch(`https://router.project-osrm.org/route/v1/foot/${userLng},${userLat};${lon},${lat}?overview=full&geometries=geojson&steps=true`);
+  const rotaData = await rota.json();
+
+  const coords = rotaData.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
+  L.polyline(coords).addTo(map);
+  map.fitBounds(coords);
+
+  const steps = rotaData.routes[0].legs[0].steps;
+
+  function traduzir(step){
+    const tipo = step.maneuver.type;
+    const dir = step.maneuver.modifier;
+    const dist = Math.round(step.distance);
+
+    if(tipo==="depart") return `Comece em frente por ${dist} metros`;
+    if(tipo==="arrive") return `Você chegou ao destino`;
+    if(tipo==="turn"){
+      if(dir==="left") return `Vire à esquerda por ${dist} metros`;
+      if(dir==="right") return `Vire à direita por ${dist} metros`;
+    }
+    return `Siga por ${dist} metros`;
+  }
+
+  let texto = "Rota iniciada. ";
+
+  steps.slice(0,5).forEach(s=>{
+    texto += traduzir(s) + ". ";
+  });
+
+  falar(texto);
+};
+
+// ❌ ERRO
+rec.onerror = ()=>{
+  falar("Não entendi, tente novamente");
+};
+
+rec.onend = ()=>{
+  console.log("Fim da escuta");
+};
